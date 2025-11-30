@@ -1,0 +1,30 @@
+# -----------------------------
+# Data locations
+# -----------------------------
+raw_data_dir: "data/raw"
+processed_data_dir: "data/processed"
+dataset_file: "rl_tensors_2023.npz"
+
+# -----------------------------
+# Data structure
+# -----------------------------
+lineup_window: 5     # H
+max_relievers: 10    # R
+
+# -----------------------------
+# State vector columns
+# -----------------------------
+state_features:
+  - inning
+  - half
+  - outs
+  - base_state
+  - score_diff
+  - pitch_count
+  - tto
+
+# Will be inferred automatically from the NPZ file:
+#   next_hitters_feats shape = [B, H, d_hit]
+#   pos_enc shape = [B, H, d_pos]
+#   reliever_feats shape = [B, R, d_rel]
+#   avail_mask shape = [B, R]

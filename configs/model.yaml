@@ -1,0 +1,25 @@
+# -----------------------------
+# Model architecture
+# -----------------------------
+hidden_size: 256
+num_layers: 3
+dropout: 0.05
+
+# Embedding sizes
+state_embedding_size: 64
+lineup_embedding_size: 64
+reliever_embedding_size: 128
+
+# Output
+num_actions: 11  # 1 stay + 10 relievers
+
+# -----------------------------
+# Feature dims
+# (Auto-detected from dataset; override only if needed)
+# -----------------------------
+estimate_feature_dims: true
+
+# -----------------------------
+# Model type
+# -----------------------------
+model_type: "QNetwork"    # or "CQL", "IQL", "TD3BC"

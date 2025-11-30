@@ -1,0 +1,13 @@
+load_checkpoint: "checkpoints/model_final.pth"
+
+# Decision thresholds
+mask_unavailable: true
+force_stay_threshold: 0.0      # if Q(stay) - max(Q(relievers)) > threshold
+force_pull_threshold: 0.5      # if max reliever Q - stay Q > threshold
+
+# Output formatting
+map_pitcher_ids_to_names: true
+player_lookup_file: "data/player_lookup.csv" # need to change to id function
+
+# Testing / evaluation settings
+simulate_n_games: 100
