@@ -1,25 +1,63 @@
 # -----------------------------
-# Model architecture
+# Which RL algorithm are we using?
+#   - "q_learning"
+#   - "dqn"
+#   - "cql"
 # -----------------------------
-hidden_size: 256
-num_layers: 3
-dropout: 0.05
+model_type: "dqn"
 
-# Embedding sizes
-state_embedding_size: 64
-lineup_embedding_size: 64
-reliever_embedding_size: 128
-
-# Output
-num_actions: 11  # 1 stay + 10 relievers
+# -----------------------------
+# Action space
+# -----------------------------
+num_actions: 11        # 1 stay + 10 relievers
 
 # -----------------------------
 # Feature dims
-# (Auto-detected from dataset; override only if needed)
+# (auto-detected from dataset; override only if needed)
 # -----------------------------
 estimate_feature_dims: true
 
 # -----------------------------
-# Model type
+# DQN
 # -----------------------------
-model_type: "QNetwork"    # or "CQL", "IQL", "TD3BC"
+dqn:
+  # Architecture (if omitted, fall back to shared defaults above)
+  hidden_size: 256
+  num_layers: 3
+  dropout: 0.05
+
+  # Training hyperparameters
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 512
+
+  # Optimization schedule
+  max_steps: 50000
+  target_update_interval: 1000
+  log_interval: 1000
+
+  # Validation split (for TD error monitoring)
+  val_fraction: 0.1
+
+# -----------------------------
+# Tabular Q-learning config
+# -----------------------------
+q_learning:
+  gamma: 0.99
+  alpha: 0.1             # learning rate for tabular updates
+  epsilon_start: 0.1
+  epsilon_end: 0.01
+
+# -----------------------------
+# CQL config 
+# -----------------------------
+cql:
+  # Architecture
+  hidden_size: 256
+  num_layers: 3
+  dropout: 0.05
+
+  # Training hyperparams (example)
+  gamma: 0.99
+  lr: 0.0005
+  alpha: 1.0             # CQL regularization weight

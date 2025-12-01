@@ -3,7 +3,7 @@
 # -----------------------------
 raw_data_dir: "data/raw"
 processed_data_dir: "data/processed"
-dataset_file: "rl_tensors_2023.npz"
+dataset_file: "rl_tensors_2022_2023.npz"
 
 # -----------------------------
 # Data structure
@@ -22,6 +22,12 @@ state_features:
   - score_diff
   - pitch_count
   - tto
+  - "is_platoon_advantage"
+  - "batter_is_left"
+  - "batter_is_right"
+  - "batter_is_switch"
+  - "pitcher_is_left"
+  - "pitcher_is_right"
 
 # Will be inferred automatically from the NPZ file:
 #   next_hitters_feats shape = [B, H, d_hit]
