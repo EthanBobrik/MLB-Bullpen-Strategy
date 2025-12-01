@@ -9,7 +9,6 @@ import yaml
 from collections import defaultdict
 
 
-
 # 1. CONFIG STRUCTURE (matches your DQN style)
 
 @dataclass
@@ -189,6 +188,7 @@ class TabularQAgent:
             lambda: np.zeros(self.num_actions, dtype=np.float32),
             raw,
         )
+
 
 
 # 5. TRAINING LOOP (mirrors train_dqn)
