@@ -17,55 +17,51 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-# Try to reuse dataset from dqn (if available)
-try:
-    from src.rl.dqn import BullpenOfflineDataset, RLDatasetConfig
-except Exception:
-    # Fallback simple dataset if the dqn module isn't importable
-    class BullpenOfflineDataset(Dataset):
-        """
-        Fallback dataset that expects NPZ with arrays:
-         - states: [N, d_state]
-         - actions: [N] int
-         - rewards: [N]
-         - next_states: [N, d_state]
-         - dones: [N] (0/1)
-         - avail_mask: [N, num_actions] optional
-        """
-        def __init__(self, npz_path: str, max_samples: Optional[int] = None):
-            data = np.load(npz_path)
-            # Standard naming convention fallback
-            self.states = data["states"]
-            self.actions = data["actions"]
-            self.rewards = data["rewards"]
-            self.next_states = data["next_states"]
-            self.dones = data["dones"].astype(np.float32)
-            self.avail_mask = data.get("avail_mask", None)
-            n = len(self.states)
-            if max_samples:
-                idx = np.random.choice(n, min(n, max_samples), replace=False)
-                self.states = self.states[idx]
-                self.actions = self.actions[idx]
-                self.rewards = self.rewards[idx]
-                self.next_states = self.next_states[idx]
-                self.dones = self.dones[idx]
-                if self.avail_mask is not None:
-                    self.avail_mask = self.avail_mask[idx]
-
-        def __len__(self):
-            return len(self.states)
-
-        def __getitem__(self, idx):
-            out = {
-                "state": self.states[idx].astype(np.float32),
-                "action": int(self.actions[idx]),
-                "reward": float(self.rewards[idx]),
-                "next_state": self.next_states[idx].astype(np.float32),
-                "done": float(self.dones[idx])
-            }
+# Fallback simple dataset if the dqn module isn't importable
+class BullpenOfflineDataset(Dataset):
+    """
+    Fallback dataset that expects NPZ with arrays:
+     - states: [N, d_state]
+     - actions: [N] int
+     - rewards: [N]
+     - next_states: [N, d_state]
+     - dones: [N] (0/1)
+     - avail_mask: [N, num_actions] optional
+    """
+    def __init__(self, npz_path: str, max_samples: Optional[int] = None):
+        data = np.load(npz_path)
+        # Standard naming convention fallback
+        self.states = data["states"]
+        self.actions = data["actions"]
+        self.rewards = data["rewards"]
+        self.next_states = data["next_states"]
+        self.dones = data["dones"].astype(np.float32)
+        self.avail_mask = data.get("avail_mask", None)
+        n = len(self.states)
+        if max_samples:
+            idx = np.random.choice(n, min(n, max_samples), replace=False)
+            self.states = self.states[idx]
+            self.actions = self.actions[idx]
+            self.rewards = self.rewards[idx]
+            self.next_states = self.next_states[idx]
+            self.dones = self.dones[idx]
             if self.avail_mask is not None:
-                out["avail_mask"] = self.avail_mask[idx].astype(np.float32)
-            return out
+                self.avail_mask = self.avail_mask[idx]
+
+    def __len__(self):
+        return len(self.states)
+
+    def __getitem__(self, idx):
+        out = {
+            "state": self.states[idx].astype(np.float32),
+            "action": int(self.actions[idx]),
+            "reward": float(self.rewards[idx]),
+            "next_state": self.next_states[idx].astype(np.float32),
+            "done": float(self.dones[idx])
+        }
+        if self.avail_mask is not None:
+            out["avail_mask"] = self.avail_mask[idx].astype(np.float32)
+        return out
 
 
 @dataclass
@@ -123,6 +119,8 @@ class MLPQNetwork(nn.Module):
 
 
 def load_yaml(path: str) -> Dict:
+    if path is None:
+        return {}
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
@@ -130,7 +128,7 @@ def load_yaml(path: str) -> Dict:
 def build_config_from_yamls(
     model_yaml="configs/model.yaml",
     training_yaml="configs/training.yaml",
-    env_yaml="configs/env.yaml",
+    env_yaml="../configs/env.yaml",
     data_yaml="configs/data.yaml",
     inference_yaml="configs/inference.yaml",
 ) -> CQLConfig:
