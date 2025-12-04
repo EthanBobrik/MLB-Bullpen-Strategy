@@ -1,0 +1,235 @@
+
+\documentclass[conference]{IEEEtran}
+
+% --- Packages ---
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  citecolor=black
+}
+
+\title{MLB Pitching Strategy}
+
+\author{\IEEEauthorblockN{Ethan Bobrik, Scott Yang, Matthew Saccone}}
+
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Major League Baseball (MLB) bullpen management is a sequential and high-stakes decision process, often made under uncertainty and driven by both game context and pitcher fatigue dynamics. To investigate whether reinforcement learning (RL) can model and potentially improve these decisions, we constructed a large-scale offline RL environment from Statcast play-by-play data for the 2022–2023 MLB seasons. This environment compresses 1.5M pitches into ~400K plate appearances, engineering state representations that include pitcher fatigue, lineup context, reliever availability, and run expectancy transitions. Using this standardized environment and dataset, we trained and evaluated three RL agents: a dueling Deep Q-Network (DQN), a Conservative Q-Learning (CQL) agent, and a Tabular Q-Learning agent.
+
+To enable a rigorous comparison, each model was evaluated solely through offline metrics, including Mean Squared TD Error, direct Q-based value estimation of the greedy policy, and action agreement with historical MLB decisions. Across all evaluation criteria, the DQN agent consistently outperformed the CQL and Tabular Q-learning agents, demonstrating higher predictive stability and stronger alignment with real-world managerial decisions. These findings indicate that deep value-based methods, when carefully trained in offline settings, can approximate complex strategic behavior in professional baseball and provide a viable foundation for decision-support tools in bullpen management.
+\end{abstract}
+
+\section{Introduction}
+Bullpen usage is one of the most strategically complex components of modern baseball. Managers must weigh expected matchup advantages, pitcher fatigue, bullpen availability, leverage situations, and long-term season considerations—all within a fast-paced and uncertain environment. Traditional approaches to bullpen management rely heavily on human intuition, heuristics, and historical tendencies, which may not always reflect optimal decision-making under dynamic game conditions. Reinforcement learning (RL), with its emphasis on sequential decision processes and long-term reward optimization, offers a compelling framework for modeling and analyzing these choices.
+
+In this study, we develop a comprehensive offline RL environment designed specifically for modeling MLB bullpen decisions. Using Statcast pitch-level data from the 2022 and 2023 seasons, we engineered a dataset that captures the essential structure of the decision process: game state, lineup progression, pitcher fatigue dynamics, reliever form and availability, and actual run expectancy outcomes. At each plate appearance, the agent must choose either to keep the current pitcher or select among up to ten potential relievers, subject to strict availability constraints derived from usage patterns. This environment allows for the direct comparison of RL agents on identical inputs and reward structures, enabling a fair and interpretable evaluation of model performance.
+
+We trained three reinforcement learning models within this environment: (1) a dueling Deep Q-Network (DQN), representing a standard deep value-based method; (2) a Conservative Q-Learning (CQL) agent, designed to mitigate the distribution shift challenges inherent in offline RL; and (3) a Tabular Q-Learning agent, serving as a baseline that relies on discretized state representations. To assess the quality of the learned policies, we employed several offline evaluation metrics, including Mean Squared TD Error (MSTE), direct Q-value estimations of greedy policies, and action agreement with historical managerial decisions.
+
+Our results show that the DQN substantially outperforms both CQL and Tabular Q-Learning. Despite the theoretical advantages of CQL in fully offline settings, our engineered environment provided sufficiently dense and representative observations for the DQN to generalize well and capture subtle aspects of managerial decision-making. The Tabular agent, while simple and interpretable, struggled with the high-dimensional continuous state space. Overall, the findings suggest that deep RL models can effectively learn from MLB’s historical bullpen data and can serve as a promising foundation for future research, simulation, and decision-support applications in baseball analytics.
+
+
+\section{Related Work}
+
+
+
+\section{Methodology}
+\subsection{System Architecture}
+The overall architecture follows a modular, end-to-end pipeline designed for scalability, reproducibility, and robustness in real-world claims processing. As illustrated in Fig 1. the system comprises four components: (i) data ingestion, (ii) preprocessing and feature engineering, (iii) model training and selection, and (iv) fraud risk scoring.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/figure1.png}
+  \caption{End-to-end pipeline for car insurance fraud detection.}
+  \label{fig:pipeline}
+\end{figure}
+
+
+The pipeline begins with a data ingestion module responsible for consolidating heterogeneous input sources, including claim-level attributes, insured demographic information, accident characteristics, and historical fraud indicators. Raw data are validated against business rules, standardized into a unified schema, and stored in a structured format for downstream analysis.	 
+
+
+The preprocessing and feature engineering module performs all transformations required to convert raw inputs into model-ready representations. This includes missing-value imputation, categorical encoding, numerical normalization, outlier handling, and the construction of domain-driven features such as claim-to-vehicle-value ratios, reporting delay metrics, and aggregated customer-level patterns. Class imbalance is explicitly addressed at this stage through oversampling, undersampling, or cost-sensitive weighting strategies, depending on the learning algorithm.
+
+
+The model training and selection module hosts the machine learning workflow, where several algorithms (e.g., Logistic Regression, Random Forest, XGBoost, Neural Networks) are trained using stratified folds to ensure reliable evaluation under severe class imbalance. Hyperparameters are optimized through grid search or random search, and performance is assessed using metrics most relevant to fraud detection, including recall, F1-score, ROC-AUC, and precision-recall AUC, as accuracy is highly impacted by class imbalance and will not provide a true measure for how well the model performs~\cite{aslam2022insurance}. The final model is selected based on validation performance and the operational cost of false negatives. 
+
+The final component, the fraud risk scoring module, applies the trained model to unseen claims. It outputs a fraud probability score, which can be interpreted by downstream systems or thresholded into a binary decision. This module is designed to be deployable within existing insurance claim management systems, enabling near real-time assessment while maintaining interpretability and transparency. 
+
+
+\subsection{Data Preprocessing}
+The data pre-processing stage prepared the automobile insurance claims dataset for subsequent fraud-detection modeling. Three datasets were used throughout this stage: the raw claims data, an intermediate cleaned dataset, and the final encoded feature-engineered dataset. The process consisted of data auditing, cleaning, transformation, and encoding, each supported by exploratory data analysis conducted across the accompanying Jupyter notebooks. 
+
+\subsubsection{Exploratory Data Analysis}
+Exploratory data analysis was conducted to characterize the structure, distributional properties, and potential irregularities within the insurance claims dataset prior to cleaning and transformation. The dataset exhibited substantial class imbalance, with non-fraudulent claims dominating the sample. Figure 2 illustrates this distribution. The imbalance confirmed the requirement for careful feature engineering and model selection to mitigate bias toward the majority class. 
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/figure2.png}
+  \caption{Fraud vs. non-fraud class distribution.}
+  \label{fig:pipeline}
+\end{figure}
+
+The demographic attributes demonstrated heterogeneous distributions. Policyholder age, shown in Figure 3, followed a unimodal distribution with concentration in the 30–50-year range. No extreme outliers were observed, although left-tail sparsity appeared in the younger demographic groups. Vehicle-related attributes showed similar skewed distributions. Figure 4 displays the distribution of vehicle price values, which were right-skewed, indicating the presence of high-value claims requiring transformation or capping during later processing steps. 
+
+\begin{figure}[!b]
+  \centering
+  \includegraphics[width=\linewidth]{figures/figure3.png}
+  \caption{Distribution of policyholder age.}
+  \label{fig:pipeline}
+\end{figure}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/figure4.png}
+  \caption{Distribution of vehicle price values.}
+  \label{fig:pipeline}
+\end{figure}
+
+Categorical attributes also showed substantial variability in class frequencies. Figure 5 demonstrates the distribution of vehicle categories, revealing dominance of two primary classes and considerably smaller representation of others. Low-frequency categories informed consolidation decisions during encoding to reduce sparsity and improve model stability. 
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/figure5.png}
+  \caption{Frequency of vehicle category classes.}
+  \label{fig:pipeline}
+\end{figure}
+
+The EDA phase further identified missingness patterns, inconsistent labeling, and distributional skewness that shaped the subsequent cleaning and transformation procedures presented in further sections. 
+
+\subsubsection{Data Cleaning}
+Cleaning operations addressed missing values, invalid entries, and inconsistent categorical labels. Numerical attributes with low missingness, such as vehicle age and policyholder age, were imputed using median values, while categorical variables with sparse missingness were imputed using mode values. Columns exhibiting excessive missingness, particularly administrative descriptors, were removed due to limited informational value. Text fields with high variability and minimal relevance were either standardized or excluded. Category labels exhibiting inconsistent capitalization or spelling were normalized. Date fields stored as strings were converted into valid \texttt{datetime} formats. Implausible numerical values, such as negative ages or extreme vehicle ages, were corrected or clipped based on domain thresholds. Table I outlines representative cleaning actions. 
+
+\begin{table}[!t]
+\centering
+\caption{Summary of Cleaning Actions}
+\label{tab:cleaning}
+\begin{tabular}{@{}p{2.5cm}p{2cm}P{3cm}@{}}
+\toprule
+\textbf{Column} & \textbf{Issue Identified} & \textbf{Action Taken} \\
+\midrule
+\texttt{AgeOfVehicle} & Missing values & Median imputation \\
+\texttt{Make} & Inconsistent labels \& missingness & Label normalization; mode imputation \\
+\texttt{AgentType} & Moderate missingness & Mode imputation \\
+\texttt{VehiclePrice} & Missingness \& skew & Median imputation; outlier capping \\
+\texttt{PastNumberOfClaims} & Missingness \& heavy skew & Median imputation; capping \\
+Text descriptors & High noise & Removed or consolidated \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Data Transformation}
+Transformation procedures prepared the cleaned dataset for modeling by standardizing variable formats and improving feature informativeness. Temporal attributes, including accident and claim timing, were converted into structured numerical components such as month, week index, and reporting delay. Exploratory analysis indicated substantial right-skew in financial and count variables, including vehicle price, annual premium, and past claim history. These variables were capped at the 99th percentile and, when appropriate, log-transformed to reduce skewness. Continuous variables intended for use in linear models were standardized with z-score scaling. Cross-tabulation results provided evidence of meaningful relationships between fraud occurrence and variables such as policy type, vehicle category, agent type, and historical claim count, thereby informing feature retention decisions. 
+
+\begin{table}[b]
+\centering
+\caption{Selected Engineered Features}
+\label{tab:features}
+\begin{tabular}{@{}p{2.5cm}p{2cm}P{3cm}@{}}
+\toprule
+\textbf{Variable} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{Month} & Categorical & Accident month \\
+\texttt{WeekOfMonth} & Ordinal & Week index within month \\
+\texttt{AccidentArea} & Binary & Accident location classification \\
+\texttt{Make} & Categorical & Vehicle manufacturer \\
+\texttt{VehicleCategory} & Categorical & Vehicle class \\
+\texttt{VehiclePrice} & Numerical & Vehicle price bracket \\
+\texttt{PolicyType} & Categorical & Policy classification \\
+\texttt{PastNumberOfClaims} & Numerical & Previous claim count \\
+\texttt{AgentType} & Categorical & Agent handling classification \\
+\texttt{NumberOfSuppliments} & Numerical & Supplemental claim count \\
+\texttt{FraudFound} & Binary & Fraud indicator \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Encoding}
+Categorical variables were converted into numerical representations compatible with supervised learning algorithms. Binary attributes such as sex, accident area, and fault status were mapped to indicator variables. Nominal categorical variables, including make, vehicle category, policy type, and agent type, were one-hot encoded. Ordinal variables such as week of month were integer-encoded. Categories with low frequency were consolidated to reduce sparsity and improve model stability. The final processed dataset retained all 15,420 records and contained approximately 70 to 80 engineered features, depending on the cardinalities introduced by one-hot encoding. Table II summarizes selected variables included in the engineered dataset. 
+
+
+\subsection{Algorithm Design}
+This work evaluates four primary models for car insurance fraud detection-Logistic Regression, Random Forest, XGBoost, and an Anomaly-Detection Neural Network, along with an ensemble model that aggregates their outputs. Related work to the subject showed that XGBoost, Random Forest, and ANN performed best, with the addition of the Logistic Regression model as baseline~\cite{aldoulat2025fraud}. Each model is described below with its mathematical formulation, justification for use in fraud detection, and key limitations. 
+
+\subsubsection{Logistic Regression}
+\textbf{Formulation.} The probability of fraud is
+\begin{equation}
+p = \sigma(w^\top x + b) = \frac{1}{1 + e^{-(w^\top x + b)}}
+\end{equation}
+where $(w,b)$ are learned by minimizing regularized binary cross-entropy.
+
+\textbf{Suitability.} Logistic Regression offers high interpretability, allowing insurers to understand how features influence fraud probability. It serves as a strong baseline and is effective when class boundaries are approximately linear. 
+
+\textbf{Limitations.} The model cannot capture nonlinear or high-order interactions without manual feature engineering. It may underperform when fraud patterns are complex or not linearly separable. 
+
+\subsubsection{Random Forest}
+\textbf{Formulation.} An ensemble of $T$ decision trees with prediction
+\begin{equation}
+\hat{p} = \frac{1}{T}\sum_{t=1}^{T} h_t(x),
+\end{equation}
+where $h_t(x)$ is the output of the  $t$-th tree trained on a bootstrap sample.
+
+\textbf{Suitability.} Random Forest captures nonlinear interactions and complex behavior patterns commonly present in fraudulent claims. It is robust to noise, handles mixed feature types, and naturally provides feature importance scores. 
+
+\textbf{Limitations.} The model can be computationally expensive with many trees and may overfit if not properly regularized. Performance may deteriorate on highly imbalanced datasets unless sampling or class weighting is applied. 
+
+\subsubsection{XGBoost}
+\textbf{Formulation.} Additive tree ensemble updated iteratively:
+\begin{equation}
+\hat{y}^{(t)} = \hat{y}^{(t-1)} + f_t(x),
+\end{equation}
+with objective minimized via second-order approximation
+\begin{equation}
+\mathcal{L} = \sum_{i=1}^{n} l\!\left(y_i, \hat{y}^{(t)}_i\right) + \Omega(f_t),
+\end{equation}
+where $\Omega(f_t)$ penalizes tree complexity.
+
+\textbf{Suitability.} XGBoost provides state-of-the-art performance on structured datasets, handles nonlinear relationships, and supports class-weighting mechanisms such as (e.g., \texttt{scale\_pos\_weight}). It is highly tunable and effective for rare-event detection.  
+
+\textbf{Limitations.} Model interpretability is lower than simpler models unless additional tools (e.g., SHAP) are used. Proper hyperparameter tuning is required to avoid overfitting, and performance may degrade on sparse or noisy inputs. 
+
+\subsubsection{Anomaly-Detection Neural Network}
+
+\textbf{Formulation.} Autoencoder learns a compressed representation $z=g(x)$ and reconstructs $\hat{x}=f(z)$. Fraud is indicated when the reconstruction error
+\begin{equation}
+E = \lVert x - \hat{x} \rVert^2
+\end{equation}
+exceeds a threshold. 
+
+\textbf{Suitability.} This approach is effective when fraudulent claims deviate substantially from normal patterns. Because it does not rely heavily on labeled data, it can be used when fraud labels are scarce or noisy. 
+
+\textbf{Limitations.} Autoencoders require careful tuning and are sensitive to input preprocessing. They offer limited interpretability and may fail when fraud patterns closely resemble legitimate claims. 
+
+\subsubsection{Ensemble Model}
+\textbf{Formulation.} The ensemble combines predictions from all four models using weighted averaging:
+\begin{equation}
+p_{\text{ens}} = \alpha_1 p_{\text{LR}} + \alpha_2 p_{\text{RF}} + \alpha_3 p_{\text{XGB}} + \alpha_4 p_{\text{NN}},
+\end{equation}
+with weights $\alpha_i$ set by validation or uniformly.
+
+\textbf{Suitability.} By aggregating diverse model types, linear, tree-based, gradient boosting, and anomaly-based, the ensemble captures complementary strengths and improves robustness. It often enhances recall, a critical metric for fraud detection. 
+
+\textbf{Limitations.} Ensembles increase system complexity and reduce interpretability compared to single models. They require additional calibration and can impose higher computational costs during training and inference. 
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+
+\end{document}
