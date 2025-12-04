@@ -1,14 +1,19 @@
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import yaml
+@dataclass
+class RLDatasetConfig:
+    data_path : Path
+    device: str
 
 @dataclass
 class DQNTrainingConfig:
@@ -24,6 +29,10 @@ class DQNTrainingConfig:
     target_update_interval: int
     log_interval: int
     val_fraction: float
+
+    #early stopping
+    early_stopping_patience: int
+    early_stopping_min_delta: float
 
     #architecture
     hidden_size: int
@@ -63,6 +72,9 @@ def load_dqn_training_config(
     log_interval = int(dqn_cfg.get('log_interval'))
     val_fraction = float(dqn_cfg.get('val_fraction'))
 
+    early_stopping_patience = int(dqn_cfg.get("early_stopping_patience", 10))
+    early_stopping_min_delta = float(dqn_cfg.get("early_stopping_min_delta", 0.0))
+
     yaml_num_actions = cfg.get('num_actions',None)
     if yaml_num_actions is not None:
         yaml_num_actions = int(yaml_num_actions)
@@ -83,13 +95,10 @@ def load_dqn_training_config(
         hidden_size=hidden_size,
         num_layers=num_layers,
         dropout=dropout,
+        early_stopping_patience=early_stopping_patience,
+        early_stopping_min_delta=early_stopping_min_delta,
         yaml_num_actions=yaml_num_actions
     )
-
-@dataclass
-class RLDatasetConfig:
-    data_path : Path
-    device: str
 
 class BullpenOfflineDataset(Dataset):
     """
@@ -117,7 +126,12 @@ class BullpenOfflineDataset(Dataset):
         self.pos_enc = torch.tensor(data["pos_enc"], dtype=torch.float32)
         self.reliever_feats = torch.tensor(data["reliever_feats"], dtype=torch.float32)
 
-        self.avail_mask = torch.tensor(data["avail_mask"], dtype=torch.bool)
+        avail_raw = torch.tensor(data["avail_mask"], dtype=torch.bool)  # [B, R]
+        B, R = avail_raw.shape
+
+        # "stay" is always available, so prepend a column of True
+        stay_col = torch.ones((B, 1), dtype=torch.bool)
+        self.avail_mask = torch.cat([stay_col, avail_raw], dim=1)  
 
         self.actions = torch.tensor(data["action_idx"], dtype=torch.long)
         self.rewards = torch.tensor(data["reward_folded"], dtype=torch.float32)
@@ -293,6 +307,14 @@ def train_dqn(cfg: DQNTrainingConfig):
     criterion = nn.MSELoss()
     opt = optim.Adam(model.parameters(),lr =cfg.lr)
 
+    #Early stopping
+    best_val_td = float('inf')
+    best_state_dict = None
+    epochs_without_improvement = 0
+
+    patience = cfg.early_stopping_patience
+    min_delta = cfg.early_stopping_min_delta
+
     step = 0
     while step < cfg.max_steps:
         for batch in train_loader:
@@ -330,9 +352,25 @@ def train_dqn(cfg: DQNTrainingConfig):
                     model, target, val_loader, cfg.gamma, cfg.device
                 )
                 print(f"      val_td_error={val_td:.5f}")
+                if val_td + min_delta < best_val_td:
+                    best_val_td = val_td
+                    best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    epochs_without_improvement = 0
+                    print(f"      (new best val TD: {best_val_td:.5f})")
+                else:
+                    epochs_without_improvement += 1
+                    print(f"      (no improvement for {epochs_without_improvement} val checks)")
+                    if epochs_without_improvement >= patience:
+                        print("[DQN] Early stopping triggered.")
+                        step = cfg.max_steps  # force outer loop exit
+                        break
 
             step+=1
             if step >= cfg.max_steps:
                 break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+        print(f"[DQN] Loaded best model with val TD-error = {best_val_td:.5f}")
 
     return model

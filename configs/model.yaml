@@ -22,9 +22,13 @@ estimate_feature_dims: true
 # -----------------------------
 dqn:
   # Architecture (if omitted, fall back to shared defaults above)
-  hidden_size: 256
+  hidden_size: 258
   num_layers: 3
-  dropout: 0.05
+  dropout: 0.10
+
+  #early stopping
+  early_stopping_patience: 10
+  early_stopping_min_delta: 0.01
 
   # Training hyperparameters
   gamma: 0.99
@@ -37,7 +41,7 @@ dqn:
   log_interval: 1000
 
   # Validation split (for TD error monitoring)
-  val_fraction: 0.1
+  val_fraction: 0.2
 
 # -----------------------------
 # Tabular Q-learning config
