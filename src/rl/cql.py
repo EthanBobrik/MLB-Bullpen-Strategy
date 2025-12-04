@@ -1,402 +1,381 @@
-"""
-src/rl/cql.py
-Conservative Q-Learning (discrete action) implementation compatible with the project's style.
-Reads config from configs/{model.yaml, training.yaml, data.yaml, env.yaml, inference.yaml}
-Intended to follow the formatting / function names used in src/rl/dqn.py
-"""
+# src/rl/cql.py
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Tuple
 
-import os
-import time
-from dataclasses import dataclass, asdict
-from typing import Optional, Tuple, Dict
-
-import yaml
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
-
-# Fallback simple dataset if the dqn module isn't importable
-class BullpenOfflineDataset(Dataset):
-    """
-    Fallback dataset that expects NPZ with arrays:
-     - states: [N, d_state]
-     - actions: [N] int
-     - rewards: [N]
-     - next_states: [N, d_state]
-     - dones: [N] (0/1)
-     - avail_mask: [N, num_actions] optional
-    """
-    def __init__(self, npz_path: str, max_samples: Optional[int] = None):
-        data = np.load(npz_path)
-        # Standard naming convention fallback
-        self.states = data["states"]
-        self.actions = data["actions"]
-        self.rewards = data["rewards"]
-        self.next_states = data["next_states"]
-        self.dones = data["dones"].astype(np.float32)
-        self.avail_mask = data.get("avail_mask", None)
-        n = len(self.states)
-        if max_samples:
-            idx = np.random.choice(n, min(n, max_samples), replace=False)
-            self.states = self.states[idx]
-            self.actions = self.actions[idx]
-            self.rewards = self.rewards[idx]
-            self.next_states = self.next_states[idx]
-            self.dones = self.dones[idx]
-            if self.avail_mask is not None:
-                self.avail_mask = self.avail_mask[idx]
-
-    def __len__(self):
-        return len(self.states)
-
-    def __getitem__(self, idx):
-        out = {
-            "state": self.states[idx].astype(np.float32),
-            "action": int(self.actions[idx]),
-            "reward": float(self.rewards[idx]),
-            "next_state": self.next_states[idx].astype(np.float32),
-            "done": float(self.dones[idx])
-        }
-        if self.avail_mask is not None:
-            out["avail_mask"] = self.avail_mask[idx].astype(np.float32)
-        return out
-
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader, random_split
+import numpy as np
+import yaml
 
 @dataclass
-class CQLConfig:
-    # general
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    seed: int = 42
+class CQLTrainingConfig:
+    # Paths / runtime
+    data_path: Path
+    device: str
 
-    # model / architecture
-    input_dim: Optional[int] = None
-    hidden_size: int = 256
-    num_layers: int = 3
-    dropout: float = 0.05
-    num_actions: int = 11
+    # Training
+    batch_size: int
+    lr: float
+    gamma: float
+    max_steps: int
+    log_interval: int
+    target_update_interval: int
+    val_fraction: float
+    
+    #early stopping
+    early_stopping_patience: int
+    early_stopping_min_delta: float
 
-    # training
-    gamma: float = 0.99
-    lr: float = 5e-4
-    batch_size: int = 512
-    max_steps: int = 50000
-    log_interval: int = 1000
-    target_update_interval: int = 1000
-    tau: float = 0.005
+    # Architecture
+    hidden_size: int
+    num_layers: int
+    dropout: float
 
     # CQL specific
-    cql_alpha: float = 1.0
-    cql_min_q_weight: Optional[float] = None
-    cql_temp: float = 1.0
-    l2_reg: float = 1e-6
+    alpha: float
 
-    # IO
-    checkpoint_dir: str = "checkpoints"
-    checkpoint_name: str = "cql_model.pth"
-    use_wandb: bool = False
+    # sanity checks
+    yaml_num_actions: Optional[int] = None
 
+@dataclass
+class RLDatasetConfig:
+    data_path: Path
+    device: str
 
-class MLPQNetwork(nn.Module):
-    def __init__(self, input_dim: int, num_actions: int, hidden_size: int = 256,
-                 num_layers: int = 3, dropout: float = 0.05):
+def load_cql_training_config(
+    model_config_path: Path,
+    data_path: Path,
+    device: Optional[str] = None
+) -> CQLTrainingConfig:
+    """
+    Load CQL hyperparameters from configs/model.yaml and
+    return a CQLTrainingConfig instance.
+
+    - model_config_path: typically Path("configs/model.yaml")
+    - data_path:         offline RL npz (e.g. rl_tensors_2022_2023.npz)
+    - device:            "cuda" / "cpu" (if None, auto-detect)
+    """
+    with open(model_config_path, 'r') as f:
+        cfg = yaml.safe_load(f)
+
+    cql_cfg = cfg.get('cql', {}) or {}
+
+    hidden_size = int(cql_cfg.get('hidden_size'))
+    num_layers = int(cql_cfg.get('num_layers'))
+    dropout = float(cql_cfg.get('dropout'))
+
+    gamma = float(cql_cfg.get('gamma'))
+    lr = float(cql_cfg.get('lr'))
+    batch_size = int(cql_cfg.get('batch_size'))
+    max_steps = int(cql_cfg.get('max_steps'))
+    target_update_interval = int(cql_cfg.get('target_update_interval'))
+    log_interval = int(cql_cfg.get('log_interval'))
+    val_fraction = float(cql_cfg.get('val_fraction'))
+
+    early_stopping_patience = int(cql_cfg.get("early_stopping_patience", 10))
+    early_stopping_min_delta = float(cql_cfg.get("early_stopping_min_delta", 0.0))
+    alpha = float(cql_cfg.get('alpha', 1.0))
+
+    yaml_num_actions = cfg.get('num_actions',None)
+    if yaml_num_actions is not None:
+        yaml_num_actions = int(yaml_num_actions)
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    return CQLTrainingConfig(
+        data_path=data_path,
+        device=device,
+        batch_size=batch_size,
+        lr=lr,
+        gamma=gamma,
+        max_steps=max_steps,
+        target_update_interval=target_update_interval,
+        log_interval=log_interval,
+        val_fraction=val_fraction,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        dropout=dropout,
+        early_stopping_patience=early_stopping_patience,
+        early_stopping_min_delta=early_stopping_min_delta,
+        yaml_num_actions=yaml_num_actions,
+        alpha=alpha
+    )
+
+class BullpenOfflineDataset(Dataset):
+    """
+    Dataset for your bullpen RL tensors.
+
+    Required keys in the npz (all present in your outfile):
+      state_vec
+      next_state_vec
+      next_hitters_feats     [B, H, D_h]
+      pos_enc                [B, H, 5]
+      reliever_feats         [B, R, D_r]
+      avail_mask             [B, num_actions]
+      action_idx             [B]
+      reward_folded          [B]
+      done                   [B]
+    """
+    def __init__(self, cfg: RLDatasetConfig):
+        self.cfg = cfg
+        data = np.load(cfg.data_path)
+
+        self.state_vec = torch.tensor(data['state_vec'], dtype=torch.float32)
+        self.next_state_vec = torch.tensor(data["next_state_vec"], dtype=torch.float32)
+
+        self.next_hitters_feats = torch.tensor(data["next_hitters_feats"], dtype=torch.float32)
+        self.pos_enc = torch.tensor(data["pos_enc"], dtype=torch.float32)
+        self.reliever_feats = torch.tensor(data["reliever_feats"], dtype=torch.float32)
+
+        avail_raw = torch.tensor(data["avail_mask"], dtype=torch.bool)  # [B, R]
+        B, R = avail_raw.shape
+
+        # "stay" is always available, so prepend a column of True
+        stay_col = torch.ones((B, 1), dtype=torch.bool)
+        self.avail_mask = torch.cat([stay_col, avail_raw], dim=1)  
+
+        self.actions = torch.tensor(data["action_idx"], dtype=torch.long)
+        self.rewards = torch.tensor(data["reward_folded"], dtype=torch.float32)
+        self.dones = torch.tensor(data["done"], dtype=torch.float32)
+
+        for name in ["state_vec", "next_state_vec", "next_hitters_feats",
+            "pos_enc", "reliever_feats", "avail_mask",
+            "actions", "rewards", "dones"]:
+            setattr(self, name, getattr(self,name).to(cfg.device))
+
+        B = self.state_vec.shape[0]
+        self.H = self.next_hitters_feats.shape[1]
+        self.D_h = self.next_hitters_feats.shape[2]
+        self.R = self.reliever_feats.shape[1]
+        self.D_r = self.reliever_feats.shape[2]
+
+        self.state_dim = (
+            self.state_vec.shape[1] + self.H * self.D_h + self.H * 5 + self.R * self.D_r
+        )
+        self.num_actions = self.avail_mask.shape[1]
+        self.num_samples = B
+
+    def _build_state(self, idx):
+        s0 = self.state_vec[idx]
+        s1 = self.next_hitters_feats[idx].reshape(-1)
+        s2 = self.pos_enc[idx].reshape(-1)
+        s3 = self.reliever_feats[idx].reshape(-1)
+        return torch.cat([s0,s1,s2,s3],dim=0)
+
+    def _build_next_state(self, idx):
+        ns0 = self.next_state_vec[idx]
+        ns1 = self.next_hitters_feats[idx].reshape(-1)
+        ns2 = self.pos_enc[idx].reshape(-1)
+        ns3 = self.reliever_feats[idx].reshape(-1)
+        return torch.cat([ns0,ns1,ns2,ns3], dim=0)
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        s = self._build_state(idx)
+        ns = self._build_next_state(idx)
+        return s, self.actions[idx], self.rewards[idx], ns, self.dones[idx], self.avail_mask[idx], self.avail_mask[idx]
+
+class CQLNet(nn.Module):
+    """Dueling Q-Network for CQL"""
+    def __init__(self, state_dim, num_actions, hidden_size, num_layers, dropout=0.0):
         super().__init__()
-        layers = []
-        in_dim = input_dim
-        for i in range(num_layers):
-            layers.append(nn.Linear(in_dim, hidden_size))
+        layers=[]
+        dim=state_dim
+        for _ in range(num_layers):
+            layers.append(nn.Linear(dim, hidden_size))
             layers.append(nn.ReLU())
-            if dropout and dropout > 0.0:
+            if dropout>0:
                 layers.append(nn.Dropout(dropout))
-            in_dim = hidden_size
-        # final head to action-values
-        layers.append(nn.Linear(in_dim, num_actions))
-        self.net = nn.Sequential(*layers)
+            dim=hidden_size
+        self.backbone = nn.Sequential(*layers)
+        self.value_head = nn.Linear(dim,1)
+        self.adv_head = nn.Linear(dim, num_actions)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)  # [B, num_actions]
+    def forward(self,x):
+        z = self.backbone(x)
+        v = self.value_head(z)
+        a = self.adv_head(z)
+        a_mean = a.mean(dim=1,keepdim=True)
+        q = v + a - a_mean
+        return q
 
+def masked_q(q: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    q2 = q.clone()
+    q2[~mask] = -1e9
+    return q2
 
-def load_yaml(path: str) -> Dict:
-    if path is None:
-        return {}
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+def cql_loss(model:CQLNet, batch, gamma:float, alpha:float, device:str):
+    s,a,r,ns,d,m,m_next = batch
+    s, a, r, ns, d, m, m_next = s.to(device), a.to(device), r.to(device), ns.to(device), d.to(device), m.to(device), m_next.to(device)
 
+    q = model(s)
+    q_sa = q.gather(1,a.unsqueeze(1)).squeeze(1)
 
-def build_config_from_yamls(
-    model_yaml="configs/model.yaml",
-    training_yaml="configs/training.yaml",
-    env_yaml="../configs/env.yaml",
-    data_yaml="configs/data.yaml",
-    inference_yaml="configs/inference.yaml",
-) -> CQLConfig:
-    # Load and merge
-    model_cfg = load_yaml(model_yaml)
-    training_cfg = load_yaml(training_yaml)
-    env_cfg = load_yaml(env_yaml)
-    data_cfg = load_yaml(data_yaml)
-    inference_cfg = load_yaml(inference_yaml)
+    with torch.no_grad():
+        q_next = model(ns)
+        q_next_masked = masked_q(q_next, m_next)
+        q_next_max = q_next_masked.max(1).values
+        tgt = r + gamma*(1-d)*q_next_max
 
-    # Initialize default config then override
-    cfg = CQLConfig()
-    # input dim: try to infer; otherwise left None
-    # num_actions: prefer model.yaml num_actions
-    if "num_actions" in model_cfg:
-        cfg.num_actions = int(model_cfg["num_actions"])
-    # architecture override
-    if "cql" in model_cfg:
-        c = model_cfg["cql"]
-        cfg.hidden_size = int(c.get("hidden_size", cfg.hidden_size))
-        cfg.num_layers = int(c.get("num_layers", cfg.num_layers))
-        cfg.dropout = float(c.get("dropout", cfg.dropout))
-        cfg.lr = float(c.get("lr", cfg.lr))
-        cfg.gamma = float(c.get("gamma", cfg.gamma))
-        cfg.batch_size = int(c.get("batch_size", cfg.batch_size)) if "batch_size" in c else cfg.batch_size
+    td_loss = nn.MSELoss()(q_sa, tgt)
 
-    # training.yaml overrides for CQL-specific params
-    cfg.max_steps = int(training_cfg.get("epochs", cfg.max_steps)) if isinstance(training_cfg.get("epochs", None), int) else cfg.max_steps
-    # training.yaml includes cql_alpha
-    if "cql_alpha" in training_cfg:
-        cfg.cql_alpha = float(training_cfg["cql_alpha"])
-    if "checkpoint_dir" in training_cfg:
-        cfg.checkpoint_dir = training_cfg["checkpoint_dir"]
-    if "use_wandb" in training_cfg:
-        cfg.use_wandb = bool(training_cfg["use_wandb"])
-    # a few safe copies
-    cfg.tau = float(training_cfg.get("tau_soft_update", cfg.tau))
-    cfg.target_update_interval = int(training_cfg.get("target_update_interval", cfg.target_update_interval))
-    cfg.log_interval = int(training_cfg.get("log_interval", cfg.log_interval))
-    # environment hints
-    cfg.gamma = float(env_cfg.get("gamma", cfg.gamma))
+    # CQL conservative penalty
+    logsumexp_q = torch.logsumexp(q, dim=1)
+    cql_penalty = (logsumexp_q - q_sa).mean()
 
-    return cfg
+    return td_loss + alpha*cql_penalty
 
-
-def cql_loss(q_values: torch.Tensor,
-             actions: torch.LongTensor,
-             q_target_values: torch.Tensor,
-             rewards: torch.Tensor,
-             dones: torch.Tensor,
-             gamma: float,
-             cql_alpha: float,
-             cql_temp: float = 1.0,
-             l2_reg: float = 0.0,
-             avail_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict]:
+def evaluate_td_error(model: CQLNet, target: CQLNet, val_loader:DataLoader, gamma:float, device:str) -> float:
     """
-    Compute TD loss + CQL conservative regularization.
+    Compute average TD-error on validation set:
 
-    Args:
-        q_values: [B, A] current Q network outputs for states
-        actions: [B] long tensor of taken actions (index)
-        q_target_values: [B, A] target Q network outputs for next_states
-        rewards: [B]
-        dones: [B] (0/1)
-        avail_mask: [B, A] (0/1) optional - denote available actions
-    Returns:
-        loss_scalar, diagnostics
+        (Q(s,a) - [r + gamma * (1-done)*max_a' Q_target(s',a')])^2
+
+    Using MSE loss (same as training).
     """
-    device = q_values.device
-    B, A = q_values.shape
+    model.eval()
+    target.eval()
+    criterion = nn.MSELoss(reduction='sum')
 
-    # gather q for actions
-    q_taken = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)  # [B]
+    total_loss = 0.0
+    total_n = 0
 
-    # TD target: reward + gamma * (1 - done) * max_a' Q_target(next, a')
-    if avail_mask is not None:
-        # mask invalid actions by setting them to -inf before max
-        q_target_masked = q_target_values.clone()
-        inf_mask = (avail_mask <= 0)
-        q_target_masked[inf_mask.bool()] = -1e9
-        q_next_max, _ = q_target_masked.max(dim=1)
-    else:
-        q_next_max, _ = q_target_values.max(dim=1)
+    for batch in val_loader:
+        s, a, r, ns, d, m, m_next = batch
 
-    td_target = rewards + gamma * (1.0 - dones) * q_next_max
-    td_loss = F.mse_loss(q_taken, td_target)
+        s = s.to(device)
+        ns = ns.to(device)
+        a = a.to(device)
+        r = r.to(device)
+        d = d.to(device)
+        m_next = m_next.to(device)
 
-    # Conservative regularizer: logsumexp(Q/temperature) - Q(s,a_taken)
-    if cql_temp != 1.0:
-        scaled_q = q_values / cql_temp
-    else:
-        scaled_q = q_values
-    if avail_mask is not None:
-        # mask before logsumexp by setting unavailable to -inf
-        scaled_q_masked = scaled_q.clone()
-        scaled_q_masked[(avail_mask <= 0).bool()] = -1e9
-        logsumexp_q = torch.logsumexp(scaled_q_masked, dim=1)  # [B]
-    else:
-        logsumexp_q = torch.logsumexp(scaled_q, dim=1)  # [B]
+        # Q(s,a)
+        q = model(s)
+        q_sa = q.gather(1, a.unsqueeze(1)).squeeze(1)
 
-    cql_reg = (logsumexp_q - q_taken).mean()
-    loss = td_loss + cql_alpha * cql_reg
+        # Target  = r+ gamma * (1-done) * max_a' Q_target(s',a')
+        q_next = target(ns)
+        q_next_masked = masked_q(q_next, m_next)
+        q_next_max = q_next_masked.max(1).values
 
-    # optional l2 reg
-    if l2_reg and l2_reg > 0:
-        l2_loss = 0.0
-        for p in torch.nn.utils.parameters_to_vector(q_values):  # this is wrong for tensors; skip
-            pass
-        # skip l2 over raw q tensor; user should set weight_decay in optimizer
-    diagnostics = {
-        "td_loss": float(td_loss.detach().cpu().item()),
-        "cql_reg": float(cql_reg.detach().cpu().item()),
-        "cql_alpha": float(cql_alpha)
-    }
-    return loss, diagnostics
+        tgt = r + gamma *(1.0-d) *q_next_max
+        loss = criterion(q_sa, tgt)
 
+        total_loss += loss.item()
+        total_n += s.size(0)
 
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
-    for tp, sp in zip(target.parameters(), source.parameters()):
-        tp.data.mul_(1.0 - tau)
-        tp.data.add_(sp.data * tau)
+    model.train()
+    return total_loss / max(total_n,1)
 
-
-def save_checkpoint(state: Dict, directory: str, name: str):
-    os.makedirs(directory, exist_ok=True)
-    path = os.path.join(directory, name)
-    torch.save(state, path)
-
-
-def load_checkpoint(path: str, device: str = "cpu") -> Dict:
-    return torch.load(path, map_location=device)
-
-
-def train_cql(
-    cfg: CQLConfig,
-    dataset: Optional[Dataset] = None,
-    dataset_npz: Optional[str] = None,
-    max_steps: Optional[int] = None,
-):
+def train_cql(cfg: CQLTrainingConfig):
     """
-    Train a discrete-action CQL agent.
-    Either provide a Dataset instance or an npz path to load the fallback BullpenOfflineDataset.
+    Offline CQL training:
+
+    - Loads BullpenOfflineDataset from cfg.data_path
+    - Splits into train / val
+    - Trains a dueling CQL with a target network and MSE loss
+    - Logs training loss and validation TD-error
     """
-    # seed
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
+    ds = BullpenOfflineDataset(RLDatasetConfig(cfg.data_path, cfg.device))
+    train_size = int((1-cfg.val_fraction) * len(ds))
+    val_size = len(ds) - train_size
+    train_ds,val_ds = random_split(ds, [train_size, val_size])
 
-    device = cfg.device
+    train_loader = DataLoader(train_ds, cfg.batch_size,shuffle=True)
+    val_loader = DataLoader(val_ds, cfg.batch_size, shuffle=False)
 
-    # load dataset
-    if dataset is None:
-        assert dataset_npz is not None, "Provide dataset or dataset_npz path"
-        dataset = BullpenOfflineDataset(dataset_npz)
-    # try to infer input dim from first sample
-    sample = dataset[0]
-    state = sample["state"]
-    input_dim = state.shape[-1] if isinstance(state, (np.ndarray,)) else state.shape[-1]
-    cfg.input_dim = int(input_dim)
+    model = CQLNet(
+        state_dim=ds.state_dim,
+        num_actions=ds.num_actions,
+        hidden_size=cfg.hidden_size,
+        num_layers=cfg.num_layers,
+        dropout=cfg.dropout
+    ).to(cfg.device)
 
-    dataloader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True)
+    target = CQLNet(
+        state_dim=ds.state_dim,
+        num_actions=ds.num_actions,
+        hidden_size=cfg.hidden_size,
+        num_layers=cfg.num_layers,
+        dropout=cfg.dropout
+    ).to(cfg.device)
+    target.load_state_dict(model.state_dict())
+    target.eval()
 
-    # networks
-    q_net = MLPQNetwork(cfg.input_dim, cfg.num_actions, cfg.hidden_size, cfg.num_layers, cfg.dropout).to(device)
-    target_q_net = MLPQNetwork(cfg.input_dim, cfg.num_actions, cfg.hidden_size, cfg.num_layers, cfg.dropout).to(device)
-    target_q_net.load_state_dict(q_net.state_dict())
+    criterion = nn.MSELoss()
+    opt = optim.Adam(model.parameters(),lr =cfg.lr)
 
-    optimizer = torch.optim.Adam(q_net.parameters(), lr=cfg.lr, weight_decay=cfg.l2_reg)
+    #Early stopping
+    best_val_td = float('inf')
+    best_state_dict = None
+    epochs_without_improvement = 0
+
+    patience = cfg.early_stopping_patience
+    min_delta = cfg.early_stopping_min_delta
 
     step = 0
-    max_steps = max_steps or cfg.max_steps
-    start_time = time.time()
-    losses = []
-    diagnostics_hist = []
+    while step < cfg.max_steps:
+        for batch in train_loader:
+            s, a, r, ns, d, m, m_next = batch
 
-    while step < max_steps:
-        for batch in dataloader:
-            if step >= max_steps:
-                break
-            states = torch.tensor(batch["state"], dtype=torch.float32, device=device)
-            actions = torch.tensor(batch["action"], dtype=torch.long, device=device)
-            rewards = torch.tensor(batch["reward"], dtype=torch.float32, device=device)
-            next_states = torch.tensor(batch["next_state"], dtype=torch.float32, device=device)
-            dones = torch.tensor(batch["done"], dtype=torch.float32, device=device)
-            avail_mask = None
-            if "avail_mask" in batch:
-                avail_mask = torch.tensor(batch["avail_mask"], dtype=torch.float32, device=device)
+            s = s.to(cfg.device)
+            ns = ns.to(cfg.device)
+            a = a.to(cfg.device)
+            r = r.to(cfg.device)
+            d = d.to(cfg.device)
+            m = m.to(cfg.device)
+            m_next = m_next.to(cfg.device)
 
-            q_values = q_net(states)  # [B, A]
+            q = model(s)
+            q_sa = q.gather(1, a.unsqueeze(1)).squeeze(1)
+
             with torch.no_grad():
-                q_target_next = target_q_net(next_states)  # [B, A]
+                q_next = target(ns)
+                q_next_mask = masked_q(q_next, m_next)
+                q_next_max = q_next_mask.max(1).values
+                tgt = r + cfg.gamma * (1-d) * q_next_max
+            
+            loss = criterion(q_sa, tgt)
 
-            loss, diag = cql_loss(
-                q_values=q_values,
-                actions=actions,
-                q_target_values=q_target_next,
-                rewards=rewards,
-                dones=dones,
-                gamma=cfg.gamma,
-                cql_alpha=cfg.cql_alpha,
-                cql_temp=cfg.cql_temp,
-                l2_reg=cfg.l2_reg,
-                avail_mask=avail_mask
-            )
-
-            optimizer.zero_grad()
+            opt.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(q_net.parameters(), 10.0)
-            optimizer.step()
+            opt.step()
 
-            # soft target update
-            soft_update(target_q_net, q_net, cfg.tau)
-
+            if step % cfg.target_update_interval == 0:
+                target.load_state_dict(model.state_dict())
+            
             if step % cfg.log_interval == 0:
-                elapsed = time.time() - start_time
-                print(f"[CQL] step={step}/{max_steps} loss={loss.item():.6f} td={diag['td_loss']:.6f} cql_reg={diag['cql_reg']:.6f} elapsed={elapsed:.1f}s")
-            if step % cfg.target_update_interval == 0 and step > 0:
-                # hard save copy
-                target_q_net.load_state_dict(q_net.state_dict())
+                print(f"[CQL] step={step} loss={loss.item():.5f}")
+                val_td = evaluate_td_error(
+                    model, target, val_loader, cfg.gamma, cfg.device
+                )
+                print(f"      val_td_error={val_td:.5f}")
+                if val_td + min_delta < best_val_td:
+                    best_val_td = val_td
+                    best_state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    epochs_without_improvement = 0
+                    print(f"      (new best val TD: {best_val_td:.5f})")
+                else:
+                    epochs_without_improvement += 1
+                    print(f"      (no improvement for {epochs_without_improvement} val checks)")
+                    if epochs_without_improvement >= patience:
+                        print("[CQL] Early stopping triggered.")
+                        step = cfg.max_steps  # force outer loop exit
+                        break
 
-            # checkpointing
-            if cfg.checkpoint_dir and (step % max(1, cfg.log_interval * 10) == 0):
-                state = {
-                    "q_state_dict": q_net.state_dict(),
-                    "target_q_state_dict": target_q_net.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "cfg": asdict(cfg),
-                    "step": step
-                }
-                save_checkpoint(state, cfg.checkpoint_dir, cfg.checkpoint_name)
+            step+=1
+            if step >= cfg.max_steps:
+                break
 
-            losses.append(float(loss.item()))
-            diagnostics_hist.append(diag)
-            step += 1
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+        print(f"[CQL] Loaded best model with val TD-error = {best_val_td:.5f}")
 
-    # final save
-    state = {
-        "q_state_dict": q_net.state_dict(),
-        "target_q_state_dict": target_q_net.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "cfg": asdict(cfg),
-        "step": step
-    }
-    save_checkpoint(state, cfg.checkpoint_dir, cfg.checkpoint_name)
-    print("[CQL] Training complete. Saved checkpoint to", os.path.join(cfg.checkpoint_dir, cfg.checkpoint_name))
-    return q_net, target_q_net, losses, diagnostics_hist
-
-
-def greedy_policy_action(q_net: nn.Module, state: np.ndarray, device: str = "cpu", avail_mask: Optional[np.ndarray] = None) -> int:
-    """Return greedy action index for a single state numpy vector."""
-    q_net.eval()
-    with torch.no_grad():
-        s = torch.tensor(state.astype(np.float32), device=device).unsqueeze(0)
-        q = q_net(s).squeeze(0).cpu().numpy()  # [A]
-        if avail_mask is not None:
-            q = np.where(avail_mask > 0, q, -1e9)
-        return int(np.argmax(q))
-
-
-# If run as script
-if __name__ == "__main__":
-    # basic CLI usage: python -m src.rl.cql (will attempt to read configs)
-    cfg = build_config_from_yamls()
-    # set dataset path inferred from data.yaml if available
-    data_cfg = load_yaml("configs/data.yaml")
-    dataset_npz = None
-    if "processed_data_dir" in data_cfg and "dataset_file" in data_cfg:
-        dataset_npz = os.path.join(data_cfg["processed_data_dir"], data_cfg["dataset_file"])
-    if dataset_npz is None or not os.path.exists(dataset_npz):
-        raise FileNotFoundError(f"Dataset npz not found at {dataset_npz}. Provide dataset_npz argument.")
-
-    train_cql(cfg, dataset_npz=dataset_npz)
+    return model
