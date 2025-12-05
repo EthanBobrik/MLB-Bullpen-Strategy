@@ -57,9 +57,9 @@ q_learning:
 # -----------------------------
 cql:
   # Architecture (if omitted, fall back to shared defaults above)
-  hidden_size: 258
+  hidden_size: 128
   num_layers: 3
-  dropout: 0.10
+  dropout: 0.05
 
   #early stopping
   early_stopping_patience: 10
@@ -67,9 +67,9 @@ cql:
 
   # Training hyperparameters
   gamma: 0.99
-  alpha: 0.5
-  lr: 0.0008
-  batch_size: 512
+  alpha: 0.1
+  lr: 0.0001
+  batch_size: 256
 
   # Optimization schedule
   max_steps: 50000
