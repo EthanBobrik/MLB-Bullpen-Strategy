@@ -23,6 +23,7 @@ class DQNTrainingConfig:
 
     # training
     batch_size: int
+    weight_decay: float
     lr: float
     gamma: float
     max_steps: int
@@ -38,6 +39,9 @@ class DQNTrainingConfig:
     hidden_size: int
     num_layers: int
     dropout: float
+
+    #optional gradient clipping
+    grad_clip_max_norm: float
 
     # sanity checks
     yaml_num_actions: Optional[int] = None
@@ -71,6 +75,9 @@ def load_dqn_training_config(
     target_update_interval = int(dqn_cfg.get('target_update_interval'))
     log_interval = int(dqn_cfg.get('log_interval'))
     val_fraction = float(dqn_cfg.get('val_fraction'))
+    weight_decay = float(dqn_cfg.get('weight_decay',0.0))
+
+    grad_clip_max_norm = float(dqn_cfg.get("grad_clip_max_norm", 0.0))
 
     early_stopping_patience = int(dqn_cfg.get("early_stopping_patience", 10))
     early_stopping_min_delta = float(dqn_cfg.get("early_stopping_min_delta", 0.0))
@@ -86,6 +93,7 @@ def load_dqn_training_config(
         data_path=data_path,
         device=device,
         batch_size=batch_size,
+        weight_decay=weight_decay,
         lr=lr,
         gamma=gamma,
         max_steps=max_steps,
@@ -95,6 +103,7 @@ def load_dqn_training_config(
         hidden_size=hidden_size,
         num_layers=num_layers,
         dropout=dropout,
+        grad_clip_max_norm=grad_clip_max_norm,
         early_stopping_patience=early_stopping_patience,
         early_stopping_min_delta=early_stopping_min_delta,
         yaml_num_actions=yaml_num_actions
@@ -259,7 +268,7 @@ def evaluate_td_error(model: DQN, target: DQN, val_loader:DataLoader, gamma:floa
         q_next_masked = masked_q(q_next, m_next)
         q_next_max = q_next_masked.max(1).values
 
-        tgt = r + gamma *(1.0-d) *q_next_max
+        tgt = r + gamma *(1.0-d.float()) *q_next_max
         loss = criterion(q_sa, tgt)
 
         total_loss += loss.item()
@@ -305,7 +314,7 @@ def train_dqn(cfg: DQNTrainingConfig):
     target.eval()
 
     criterion = nn.MSELoss()
-    opt = optim.Adam(model.parameters(),lr =cfg.lr)
+    opt = optim.Adam(model.parameters(),lr =cfg.lr, weight_decay=cfg.weight_decay)
 
     #Early stopping
     best_val_td = float('inf')
@@ -341,6 +350,12 @@ def train_dqn(cfg: DQNTrainingConfig):
 
             opt.zero_grad()
             loss.backward()
+
+            if cfg.grad_clip_max_norm > 0.0: 
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), cfg.grad_clip_max_norm
+                )
+
             opt.step()
 
             if step % cfg.target_update_interval == 0:
