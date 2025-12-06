@@ -9,7 +9,11 @@ This module is responsible ONLY for:
 Everything downstream should work from Parquet, not from live API calls.
 """
 
-from pybaseball import statcast
+try:
+    from pybaseball import statcast
+except ModuleNotFoundError:
+    statcast = None
+
 import pandas as pd
 from pathlib import Path
 from typing import Iterable,List, Optional
