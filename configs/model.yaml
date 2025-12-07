@@ -57,6 +57,7 @@ q_learning:
 # -----------------------------
 cql:
 <<<<<<< HEAD
+<<<<<<< HEAD
   # Architecture
   hidden_size: 256
   num_layers: 3
@@ -67,6 +68,8 @@ cql:
   lr: 0.0005
   alpha: 1.0             # CQL regularization weight
 =======
+=======
+>>>>>>> 95dacd76baed1e565f1593a23248d6a51f330ecd
   # Architecture (if omitted, fall back to shared defaults above)
   hidden_size: 64
   num_layers: 3
@@ -88,5 +91,9 @@ cql:
   log_interval: 1000
 
   # Validation split (for TD error monitoring)
+<<<<<<< HEAD
   val_fraction: 0.2
 >>>>>>> ddb112b (Completed CQL model and training)
+=======
+  val_fraction: 0.2
+>>>>>>> 95dacd76baed1e565f1593a23248d6a51f330ecd
