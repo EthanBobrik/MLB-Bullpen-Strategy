@@ -43,14 +43,22 @@ dqn:
   # Validation split (for TD error monitoring)
   val_fraction: 0.2
 
-# -----------------------------
-# Tabular Q-learning config
-# -----------------------------
-q_learning:
-  gamma: 0.99
-  alpha: 0.1             # learning rate for tabular updates
-  epsilon_start: 0.1
-  epsilon_end: 0.01
+
+# ------------------------------------------------------------
+# Tabular Q-Learning Configuration
+# ------------------------------------------------------------
+
+tabular_q:
+  alpha: 0.05          # learning rate for Q-updates
+  gamma: 0.99          # discount factor
+  num_epochs: 25       # number of passes over dataset
+  precision: 4         # decimal rounding for discretization
+  log_interval: 1      # print val_td_error every epoch
+  val_fraction: 0.1    # 10% of data used for validation
+
+# Optional sanity check:
+num_actions: 11        # ensure matches dataset's action count
+
 
 # -----------------------------
 # CQL config 
