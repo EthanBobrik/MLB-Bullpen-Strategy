@@ -41,14 +41,24 @@ def load_tabular_q_config(
     with open(model_config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
-    tq_cfg = cfg.get("tabular_q", {}) or {}
+    # Support both an explicit tabular_q block and the legacy q_learning block.
+    tq_cfg = cfg.get("tabular_q") or cfg.get("q_learning") or {}
 
-    alpha = float(tq_cfg.get("alpha"))
-    gamma = float(tq_cfg.get("gamma"))
-    num_epochs = int(tq_cfg.get("num_epochs"))
-    precision = int(tq_cfg.get("precision"))
-    log_interval = int(tq_cfg.get("log_interval"))
-    val_fraction = float(tq_cfg.get("val_fraction", 0.1))
+    def _get(name, default):
+        val = tq_cfg.get(name, default)
+        if val is None:
+            return default
+        try:
+            return type(default)(val)
+        except (TypeError, ValueError):
+            return default
+
+    alpha = _get("alpha", 0.1)
+    gamma = _get("gamma", 0.99)
+    num_epochs = _get("num_epochs", 30)
+    precision = _get("precision", 3)
+    log_interval = _get("log_interval", 1)
+    val_fraction = float(tq_cfg.get("val_fraction", 0.2))
 
     yaml_num_actions = cfg.get("num_actions", None)
     if yaml_num_actions is not None:
